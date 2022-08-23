@@ -434,7 +434,7 @@ func (pd *pushDescriptor) uploadUsingSession(
 
 	switch m := pd.layer.MediaType(); m {
 	case c8dimages.MediaTypeDockerSchema2Layer:
-		compressedReader, compressionDone := compress(reader)
+		compressedReader, compressionDone := compress(ctx, reader)
 		defer func(closer io.Closer) {
 			closer.Close()
 			<-compressionDone
