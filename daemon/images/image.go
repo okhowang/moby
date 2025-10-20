@@ -14,6 +14,7 @@ import (
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
@@ -46,7 +47,7 @@ type manifest struct {
 	Config ocispec.Descriptor `json:"config"`
 }
 
-func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
+func (i *ImageService) PrepareSnapshot(ctx context.Context, container *container.Container, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
 	// Only makes sense when containerd image store is used
 	panic("not implemented")
 }

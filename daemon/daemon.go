@@ -25,9 +25,11 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/api/services/introspection/v1"
 	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/containerd/pkg/dialer"
 	"github.com/containerd/containerd/remotes/docker"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
 	dist "github.com/docker/distribution"
@@ -85,6 +87,7 @@ import (
 	"go.etcd.io/bbolt"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
+	"golang.org/x/exp/maps"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -1129,9 +1132,36 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 		}
 		log.G(ctx).Info("Starting daemon with containerd snapshotter integration enabled")
 
-		// FIXME(thaJeztah): implement automatic snapshotter-selection similar to graph-driver selection; see https://github.com/moby/moby/issues/44076
+		resp, err := d.containerdClient.IntrospectionService().Plugins(ctx, []string{`type=="io.containerd.snapshotter.v1"`})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get containerd plugins: %w", err)
+		}
+		if resp == nil || len(resp.Plugins) == 0 {
+			return nil, fmt.Errorf("failed to get containerd plugins response: %w", cerrdefs.ErrUnavailable)
+		}
+		availableDrivers := map[string]*introspection.Plugin{}
+		for _, p := range resp.Plugins {
+			if p == nil || p.Type != "io.containerd.snapshotter.v1" {
+				continue
+			}
+			if p.InitErr == nil {
+				availableDrivers[p.ID] = p
+			} else if (p.ID == driverName) || (driverName == "" && p.ID == containerd.DefaultSnapshotter) {
+				log.G(ctx).WithField("message", p.InitErr.Message).Warn("Preferred snapshotter not available in containerd")
+			}
+		}
+
 		if driverName == "" {
-			driverName = containerd.DefaultSnapshotter
+			if _, ok := availableDrivers[containerd.DefaultSnapshotter]; ok {
+				driverName = containerd.DefaultSnapshotter
+			} else if _, ok := availableDrivers["native"]; ok {
+				driverName = "native"
+			} else {
+				log.G(ctx).WithField("available", maps.Keys(availableDrivers)).Debug("Preferred snapshotter not available in containerd")
+				return nil, fmt.Errorf("snapshotter selection failed, no drivers available: %w", cerrdefs.ErrUnavailable)
+			}
+		} else if _, ok := availableDrivers[driverName]; !ok {
+			return nil, fmt.Errorf("configured driver %q not available: %w", driverName, cerrdefs.ErrUnavailable)
 		}
 
 		// Configure and validate the kernels security support. Note this is a Linux/FreeBSD
@@ -1143,6 +1173,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 			Client:          d.containerdClient,
 			Containers:      d.containers,
 			Snapshotter:     driverName,
+			RootDir:         availableDrivers[driverName].Exports["root"],
 			RegistryHosts:   d.RegistryHosts,
 			Registry:        d.registryService,
 			EventsService:   d.EventsService,

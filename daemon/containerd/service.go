@@ -22,6 +22,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/idtools"
+	"github.com/docker/docker/quota"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
 )
@@ -43,6 +44,7 @@ type ImageService struct {
 
 	// defaultPlatformOverride is used in tests to override the host platform.
 	defaultPlatformOverride platforms.MatchComparer
+	quotaCtl                *quota.Control
 }
 
 type registryResolver interface {
@@ -56,6 +58,7 @@ type ImageServiceConfig struct {
 	Client          *containerd.Client
 	Containers      container.Store
 	Snapshotter     string
+	RootDir         string
 	RegistryHosts   docker.RegistryHosts
 	Registry        registryResolver
 	EventsService   *daemonevents.Events
@@ -65,6 +68,10 @@ type ImageServiceConfig struct {
 
 // NewService creates a new ImageService.
 func NewService(config ImageServiceConfig) *ImageService {
+	var quotaCtl *quota.Control
+	if config.RootDir != "" {
+		quotaCtl, _ = quota.NewControl(config.RootDir)
+	}
 	return &ImageService{
 		client:  config.Client,
 		images:  config.Client.ImageService(),
@@ -79,6 +86,7 @@ func NewService(config ImageServiceConfig) *ImageService {
 		eventsService:   config.EventsService,
 		refCountMounter: config.RefCountMounter,
 		idMapping:       config.IDMapping,
+		quotaCtl:        quotaCtl,
 	}
 }
 

@@ -3,6 +3,7 @@ package containerd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd"
 	containerdimages "github.com/containerd/containerd/images"
@@ -11,14 +12,22 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
+	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/quota"
+	"github.com/docker/go-units"
 	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
 // PrepareSnapshot prepares a snapshot from a parent image for a container
-func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
+func (i *ImageService) PrepareSnapshot(ctx context.Context, container *container.Container, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
+	id := container.ID
+	storageOpt := container.HostConfig.StorageOpt
+	if _, ok := storageOpt["size"]; ok && i.quotaCtl == nil {
+		return errors.New("--storage-opt is not supported only by underlay fs")
+	}
 	var parentSnapshot string
 	if parentImage != "" {
 		img, err := i.resolveImage(ctx, parentImage)
@@ -81,7 +90,56 @@ func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentIma
 	}
 
 	_, err = snapshotter.Prepare(ctx, id, id+"-init")
-	return err
+	if err != nil {
+		return err
+	}
+
+	// set quota
+	mounts, err := snapshotter.Mounts(ctx, id)
+	if storageOpt != nil && len(storageOpt) > 0 {
+		var upperdir string
+		for _, m := range mounts {
+			for _, option := range m.Options {
+				if strings.HasPrefix(option, "upperdir=") {
+					upperdir = strings.TrimPrefix(option, "upperdir=")
+					break
+				}
+			}
+		}
+		size, err := parseStorageOpt(storageOpt)
+		if err != nil {
+			return err
+		}
+
+		if size > 0 {
+			// Set container disk quota limit
+			if err = i.quotaCtl.SetQuota(upperdir, quota.Quota{Size: size}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// Parse overlay storage options
+func parseStorageOpt(storageOpt map[string]string) (uint64, error) {
+	// Read size to set the disk project quota per container
+	for key, val := range storageOpt {
+		key = strings.ToLower(key)
+		switch key {
+		case "size":
+			size, err := units.RAMInBytes(val)
+			if err != nil {
+				return 0, err
+			}
+			return uint64(size), nil
+		default:
+			return 0, fmt.Errorf("Unknown option %s", key)
+		}
+	}
+
+	return 0, nil
 }
 
 func (i *ImageService) prepareInitLayer(ctx context.Context, id string, parent string, setupInit func(string) error) error {
