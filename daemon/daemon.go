@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/containerd/containerd/api/services/introspection/v1"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/defaults"
 	"github.com/containerd/containerd/v2/pkg/dialer"
@@ -1060,9 +1062,36 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 		}
 		log.G(ctx).Info("Starting daemon with containerd snapshotter integration enabled")
 
-		// FIXME(thaJeztah): implement automatic snapshotter-selection similar to graph-driver selection; see https://github.com/moby/moby/issues/44076
+		resp, err := d.containerdClient.IntrospectionService().Plugins(ctx, `type=="io.containerd.snapshotter.v1"`)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get containerd plugins: %w", err)
+		}
+		if resp == nil || len(resp.Plugins) == 0 {
+			return nil, fmt.Errorf("failed to get containerd plugins response: %w", cerrdefs.ErrUnavailable)
+		}
+		availableDrivers := map[string]*introspection.Plugin{}
+		for _, p := range resp.Plugins {
+			if p == nil || p.Type != "io.containerd.snapshotter.v1" {
+				continue
+			}
+			if p.InitErr == nil {
+				availableDrivers[p.ID] = p
+			} else if (p.ID == driverName) || (driverName == "" && p.ID == defaults.DefaultSnapshotter) {
+				log.G(ctx).WithField("message", p.InitErr.Message).Warn("Preferred snapshotter not available in containerd")
+			}
+		}
+
 		if driverName == "" {
-			driverName = defaults.DefaultSnapshotter
+			if _, ok := availableDrivers[defaults.DefaultSnapshotter]; ok {
+				driverName = defaults.DefaultSnapshotter
+			} else if _, ok := availableDrivers["native"]; ok {
+				driverName = "native"
+			} else {
+				log.G(ctx).WithField("available", maps.Keys(availableDrivers)).Debug("Preferred snapshotter not available in containerd")
+				return nil, fmt.Errorf("snapshotter selection failed, no drivers available: %w", cerrdefs.ErrUnavailable)
+			}
+		} else if _, ok := availableDrivers[driverName]; !ok {
+			return nil, fmt.Errorf("configured driver %q not available: %w", driverName, cerrdefs.ErrUnavailable)
 		}
 
 		// Configure and validate the kernels security support. Note this is a Linux/FreeBSD
@@ -1074,6 +1103,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 			Client:          d.containerdClient,
 			Containers:      d.containers,
 			Snapshotter:     driverName,
+			RootDir:         availableDrivers[driverName].Exports["root"],
 			RegistryHosts:   d.RegistryHosts,
 			Registry:        d.registryService,
 			EventsService:   d.EventsService,
