@@ -105,7 +105,7 @@ func (i *ImageService) createLayer(descriptor *ocispec.Descriptor, layerName str
 			return nil, err
 		}
 
-		if size > 0 {
+		if size > 0 && upperdir != "" {
 			// Set container disk quota limit
 			if err = i.quotaCtl.SetQuota(upperdir, quota.Quota{Size: size}); err != nil {
 				return nil, err
