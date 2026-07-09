@@ -65,3 +65,15 @@ func WithDetectLocalBinary() DaemonOpt {
 		return nil
 	}
 }
+
+func WithVolatile() DaemonOpt {
+	return func(r *remote) error {
+		if r.Config.Plugins == nil {
+			r.Config.Plugins = make(map[string]interface{})
+		}
+		r.Config.Plugins["io.containerd.snapshotter.v1.overlayfs"] = map[string]interface{}{
+			"mount_options": []string{"volatile"},
+		}
+		return nil
+	}
+}

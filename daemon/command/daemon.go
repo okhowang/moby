@@ -905,6 +905,10 @@ func getContainerdDaemonOpts(cfg *config.Config) ([]supervisor.DaemonOpt, error)
 		opts = append(opts, supervisor.WithDetectLocalBinary())
 	}
 
+	if os.Getenv("CONTAINERD_VOLATILE") != "" {
+		opts = append(opts, supervisor.WithVolatile())
+	}
+
 	return opts, nil
 }
 
