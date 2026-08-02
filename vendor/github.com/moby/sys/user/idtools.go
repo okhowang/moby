@@ -112,16 +112,12 @@ func (i IdentityMapping) ToHost(uid, gid int) (int, int, error) {
 	var err error
 	ruid, rgid := i.RootPair()
 
-	if uid != ruid {
-		ruid, err = toHost(uid, i.UIDMaps)
-		if err != nil {
-			return ruid, rgid, err
-		}
+	ruid, err = toHost(uid, i.UIDMaps)
+	if err != nil {
+		return ruid, rgid, err
 	}
 
-	if gid != rgid {
-		rgid, err = toHost(gid, i.GIDMaps)
-	}
+	rgid, err = toHost(gid, i.GIDMaps)
 	return ruid, rgid, err
 }
 
